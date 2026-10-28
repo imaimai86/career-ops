@@ -21,6 +21,7 @@ import { PIPELINE_TABS, pipelineQuery, pipelineTab } from "@/lib/pipeline-naviga
 import { COMPARE_MAX } from "@/lib/pipeline-compare.mjs";
 import { postingHref, postingLabel } from "@/lib/posting-url.mjs";
 import { trackerCsv, trackerCsvFilename } from "@/lib/tracker-csv.mjs";
+import { AddRoleBar } from "@/components/pipeline/add-role-bar";
 
 type Tab = (typeof PIPELINE_TABS)[number];
 
@@ -201,6 +202,10 @@ export function PipelineView({
             </button>
           </div>
         )}
+      </div>
+
+      <div className="mt-4">
+        <AddRoleBar />
       </div>
 
       {/* tabs */}
