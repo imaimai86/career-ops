@@ -1,11 +1,13 @@
 "use client";
 
-import { Loader2, Wand2, Asterisk, Paperclip, Sparkles, ArrowUpRight, ShieldCheck, RotateCcw, FileCheck2, AlertTriangle, Terminal, Check, ScanLine, PenLine, CheckCircle2, Info, ExternalLink, MousePointerClick, ArrowLeft, ClipboardCheck } from "lucide-react";
+import { Loader2, Wand2, Asterisk, Paperclip, Sparkles, ArrowUpRight, ShieldCheck, RotateCcw, FileCheck2, AlertTriangle, Terminal, Check, ScanLine, PenLine, CheckCircle2, Info, ExternalLink, MousePointerClick, ArrowLeft, ClipboardCheck, Zap } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ApplyIssue, DriveStep } from "@/lib/apply/issue";
 import { useApply } from "@/components/apply/apply-provider";
+import { useJobs } from "@/components/jobs/job-store";
 import { needsLeaveConfirmation, resolveReturnPath } from "@/lib/apply/exit.mjs";
-import { isResumeLabel } from "@/lib/apply/resume-label.mjs";
+import { isResumeLabel, isCoverLabel } from "@/lib/apply/resume-label.mjs";
 import type { ApplyField } from "@/lib/apply/extract";
 import { cn } from "@/lib/cn";
 import { Fragment, useEffect, useId, useRef, useState } from "react";
@@ -51,7 +53,18 @@ export function ApplyView() {
           >
             <Wand2 className="size-4" /> Read form
           </button>
+          <button
+            onClick={() => {
+              const u = input.trim();
+              if (u) void a.directFillUrl(u);
+            }}
+            title="Fast direct form filling with Playwright in ~2 seconds (opens visible browser with profile & CV/Cover attached)"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-3.5 py-1.5 text-sm font-medium text-amber-600 transition-colors hover:bg-amber-500/20 dark:text-amber-400"
+          >
+            <Zap className="size-4" /> Fast Direct Fill
+          </button>
         </div>
+        <ApplyMatchHelper url={input} onFastDirectFill={(u) => void a.directFillUrl(u)} />
         {a.error && (
           <div className="mt-4 max-w-2xl rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3.5">
             <div className="flex items-start gap-2.5">
@@ -182,7 +195,20 @@ export function ApplyView() {
             ))}
           </div>
 
+          <div className="mt-4">
+            <AttachedDocumentsBanner url={a.url} />
+          </div>
+
           <div className="mt-5 flex flex-wrap items-center gap-3">
+            <button
+              onClick={a.directFill}
+              disabled={filling || prefilling}
+              title="Open visible browser and fill form directly with Playwright in ~2 seconds. Bypasses slow LLM roundtrips."
+              className="inline-flex items-center gap-2 rounded-full border border-amber-500/50 bg-amber-500/15 px-5 py-2.5 text-sm font-semibold text-amber-700 shadow-sm transition-all hover:bg-amber-500 hover:text-white dark:text-amber-300 dark:hover:text-black disabled:opacity-50"
+            >
+              {filling ? <Loader2 className="size-4 animate-spin" /> : <Zap className="size-4" />}
+              {filling ? "Filling with Playwright…" : "Fast Playwright Direct Fill"}
+            </button>
             <button
               onClick={a.fill}
               disabled={filling || prefilling}
@@ -610,6 +636,10 @@ function FieldRow({
           <div className="flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-400">
             <FileCheck2 className="size-4 shrink-0" /> Your tailored CV (PDF) will be attached automatically — you can swap it on the real form.
           </div>
+        ) : isCoverLabel(f.label) ? (
+          <div className="flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-400">
+            <FileCheck2 className="size-4 shrink-0" /> Your tailored cover letter (PDF) will be attached automatically — you can swap it on the real form.
+          </div>
         ) : (
           <div className="flex items-center gap-2 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted">
             <Paperclip className="size-4 shrink-0" /> Attach this file yourself on the real form at the handoff.
@@ -618,6 +648,243 @@ function FieldRow({
       ) : (
         <input {...controlProps} type={["email", "tel", "url", "number", "date"].includes(f.type) ? f.type : "text"} maxLength={f.maxLength} value={value} onChange={(e) => onChange(e.target.value)} placeholder={needs ? "You fill this one." : "…"} className={base} />
       )}
+    </div>
+  );
+}
+
+// ── Match & Tailoring helpers for Direct Apply ─────────────────────────────
+type MatchStatusData = {
+  matched: boolean;
+  n?: string;
+  company?: string;
+  title?: string;
+  score?: string | null;
+  reportHref?: string;
+  hasTailoredCv?: boolean;
+  cvName?: string | null;
+  hasTailoredCover?: boolean;
+  coverName?: string | null;
+};
+
+function ApplyMatchHelper({
+  url,
+  onFastDirectFill,
+}: {
+  url: string;
+  onFastDirectFill?: (u: string) => void;
+}) {
+  const { startJob } = useJobs();
+  const [status, setStatus] = useState<MatchStatusData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [evalStarted, setEvalStarted] = useState(false);
+  const timer = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (timer.current) clearTimeout(timer.current);
+    const u = url.trim();
+    if (!u || !/^https?:\/\//i.test(u)) {
+      setStatus(null);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    timer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/apply/match-status?url=${encodeURIComponent(u)}`);
+        if (res.ok) {
+          const d = (await res.json()) as MatchStatusData;
+          setStatus(d);
+        } else {
+          setStatus(null);
+        }
+      } catch {
+        setStatus(null);
+      } finally {
+        setLoading(false);
+      }
+    }, 300);
+
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [url]);
+
+  if (!url.trim() || !/^https?:\/\//i.test(url.trim())) return null;
+
+  if (loading) {
+    return (
+      <div className="mt-3 flex items-center gap-2 text-xs text-muted">
+        <Loader2 className="size-3.5 animate-spin text-brand" />
+        Checking job match & document tailoring status…
+      </div>
+    );
+  }
+
+  if (evalStarted) {
+    return (
+      <div className="mt-3 flex items-center gap-2 rounded-xl border border-brand/40 bg-brand-soft/70 px-4 py-2.5 text-xs text-brand">
+        <Sparkles className="size-4 shrink-0 animate-spin" />
+        <span>Evaluation worker started! Scoring match against your CV in the background.</span>
+        <Link href="/pipeline" className="ml-auto underline font-medium">View in Pipeline</Link>
+      </div>
+    );
+  }
+
+  if (status?.matched) {
+    return (
+      <div className="mt-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3.5 text-xs backdrop-blur-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
+            <span className="font-semibold text-foreground">
+              Matched Application #{status.n}: {status.company} — {status.title}
+            </span>
+            {status.score && (
+              <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 font-bold text-emerald-700 dark:text-emerald-300">
+                Fit {status.score}
+              </span>
+            )}
+          </div>
+          {status.reportHref && (
+            <Link href={status.reportHref} className="inline-flex items-center gap-1 font-medium text-brand hover:underline">
+              View Evaluation Report <ExternalLink className="size-3" />
+            </Link>
+          )}
+        </div>
+
+        <div className="mt-2.5 flex flex-wrap items-center gap-3 text-muted">
+          <span className="inline-flex items-center gap-1 font-medium">
+            {status.hasTailoredCv ? (
+              <span className="text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-1">
+                <FileCheck2 className="size-3.5" /> Tailored CV Ready ({status.cvName})
+              </span>
+            ) : (
+              <span className="text-amber-600 dark:text-amber-400 inline-flex items-center gap-1">
+                <AlertTriangle className="size-3.5" /> Using Base CV ({status.cvName})
+              </span>
+            )}
+          </span>
+          <span>•</span>
+          <span className="inline-flex items-center gap-1">
+            {status.hasTailoredCover ? (
+              <span className="text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-1">
+                <FileCheck2 className="size-3.5" /> Tailored Cover Letter Ready ({status.coverName})
+              </span>
+            ) : (
+              <span className="text-muted inline-flex items-center gap-1">
+                <Info className="size-3.5" /> No Cover Letter drafted
+              </span>
+            )}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  if (status && !status.matched) {
+    return (
+      <div className="mt-4 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs backdrop-blur-sm">
+        <div className="flex items-start gap-2.5">
+          <Info className="mt-0.5 size-4 text-amber-500 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-amber-900 dark:text-amber-200">
+              This job posting has not been evaluated against your CV yet
+            </p>
+            <p className="mt-0.5 text-amber-800/80 dark:text-amber-300/80">
+              Direct apply will use your base CV ({status.cvName || "cv.pdf"}) and no cover letter. Would you like to check the job match and tailor your CV & cover letter first?
+            </p>
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  startJob({
+                    title: "Score · Job Posting",
+                    subtitle: "evaluating fit & gap analysis",
+                    kind: "evaluate",
+                    input: url.trim(),
+                    page: "/pipeline",
+                  });
+                  setEvalStarted(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-brand-foreground shadow-sm transition hover:bg-brand-200"
+              >
+                <Sparkles className="size-3.5" /> Check Match & Tailor
+              </button>
+              {onFastDirectFill && (
+                <button
+                  type="button"
+                  onClick={() => onFastDirectFill(url.trim())}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-surface px-3 py-1.5 text-xs font-medium text-amber-700 dark:text-amber-300 hover:bg-amber-500/20"
+                >
+                  <Zap className="size-3.5" /> Continue with Base CV
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function AttachedDocumentsBanner({ url }: { url: string }) {
+  const [status, setStatus] = useState<MatchStatusData | null>(null);
+
+  useEffect(() => {
+    if (!url) return;
+    fetch(`/api/apply/match-status?url=${encodeURIComponent(url)}`)
+      .then((r) => r.json())
+      .then((d) => setStatus(d))
+      .catch(() => {});
+  }, [url]);
+
+  if (!status) return null;
+
+  return (
+    <div className="rounded-xl border border-border bg-surface/80 p-3 text-xs backdrop-blur-sm shadow-sm">
+      <div className="font-semibold text-foreground mb-1.5 flex items-center justify-between">
+        <span>Attached Documents for this Application</span>
+        {status.reportHref && (
+          <Link href={status.reportHref} className="text-[11px] font-normal text-brand hover:underline inline-flex items-center gap-0.5">
+            View Evaluation Report <ExternalLink className="size-3" />
+          </Link>
+        )}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-muted">
+        <div className="flex items-center gap-1.5">
+          {status.hasTailoredCv ? (
+            <FileCheck2 className="size-3.5 text-emerald-500 shrink-0" />
+          ) : (
+            <AlertTriangle className="size-3.5 text-amber-500 shrink-0" />
+          )}
+          <span className="truncate">
+            <span className="font-medium text-foreground">CV / Resume:</span>{" "}
+            {status.hasTailoredCv ? (
+              <span className="text-emerald-700 dark:text-emerald-400 font-medium">{status.cvName}</span>
+            ) : (
+              <span className="text-amber-700 dark:text-amber-400">Base {status.cvName || "cv.pdf"} (Un-tailored)</span>
+            )}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {status.hasTailoredCover ? (
+            <FileCheck2 className="size-3.5 text-emerald-500 shrink-0" />
+          ) : (
+            <Info className="size-3.5 text-faint shrink-0" />
+          )}
+          <span className="truncate">
+            <span className="font-medium text-foreground">Cover Letter:</span>{" "}
+            {status.hasTailoredCover ? (
+              <span className="text-emerald-700 dark:text-emerald-400 font-medium">{status.coverName}</span>
+            ) : (
+              <span className="text-faint">None attached</span>
+            )}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

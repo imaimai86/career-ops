@@ -5,6 +5,7 @@ import type { ApplyField } from "@/lib/apply/extract";
 import type { ApplyIssue, DriveStep } from "@/lib/apply/issue";
 import { resolveLateSession } from "@/lib/apply/exit.mjs";
 import { readFillResult, screenForFill } from "@/lib/apply/fill-stream.mjs";
+import { normalizeToApplicationUrl } from "@/lib/apply/url-normalize.mjs";
 
 export type FillStep = { fieldId: string; label: string; ok: boolean; thumb?: string };
 type Meta = { needsConfirmation?: boolean };
@@ -32,6 +33,8 @@ type ApplyCtx = {
   prefill: () => Promise<void>;
   setAnswer: (idOrLabel: string, value: string) => void;
   fill: () => Promise<void>;
+  directFill: () => Promise<void>;
+  directFillUrl: (url: string) => Promise<void>;
   agentFill: () => Promise<void>;
   reset: () => void;
 };
@@ -161,7 +164,8 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const open = useCallback(async (u: string, opts?: { prefill?: boolean; company?: string; n?: string; from?: string }) => {
+  const open = useCallback(async (rawUrl: string, opts?: { prefill?: boolean; company?: string; n?: string; from?: string }) => {
+    const u = normalizeToApplicationUrl(rawUrl);
     const gen = ++generation.current;
     dropFill();
     // Opening a second form abandons the first one's browser exactly the way
@@ -224,7 +228,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     if (!sessionId.current) return;
     const gen = generation.current;
     if (!cliId()) {
-      setError("Configure a CLI in Config first, then pre-fill from your CV.");
+      setError("Select your coding agent CLI tool in Config first [options: antigravity | claude | codex | gemini | opencode | pi | copilot | qwen], then pre-fill from your CV.");
       return;
     }
     setStatus("prefilling");
@@ -417,9 +421,60 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     setError("");
   }, []);
 
+  const directFillUrl = useCallback(async (targetUrl: string) => {
+    if (!targetUrl) return;
+    const normalized = normalizeToApplicationUrl(targetUrl);
+    const gen = generation.current;
+    if (sessionId.current) {
+      closeSession(sessionId.current);
+      sessionId.current = null;
+    }
+    setStatus("filling");
+    setError("");
+    setUrl(normalized);
+    setSteps([]);
+    try {
+      const r = await fetch("/api/apply/direct", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: normalized,
+          company: companyRef.current || undefined,
+          application: nRef.current || undefined,
+          title: title || undefined,
+          answers: answersRef.current,
+          fields: fieldsRef.current,
+        }),
+      });
+      const d = await r.json();
+      if (generation.current !== gen) return;
+      if (d.error) {
+        setError(d.error);
+        setStatus("error");
+        return;
+      }
+      const newSteps: FillStep[] = (d.filledFields ?? []).map((name: string) => ({
+        fieldId: name,
+        label: name,
+        ok: true,
+      }));
+      setSteps(newSteps);
+      setStatus("done");
+    } catch (e) {
+      if (generation.current !== gen) return;
+      setError(e instanceof Error ? e.message : "Direct fill failed");
+      setStatus("error");
+    }
+  }, [title]);
+
+  const directFill = useCallback(async () => {
+    if (!url) return;
+    await directFillUrl(url);
+  }, [url, directFillUrl]);
+
   const value = useMemo(
-    () => ({ status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, agentFill, reset }),
-    [status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, agentFill, reset],
+    () => ({ status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, directFill, directFillUrl, agentFill, reset }),
+    [status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, directFill, directFillUrl, agentFill, reset],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

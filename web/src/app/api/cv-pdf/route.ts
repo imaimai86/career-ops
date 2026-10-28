@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveTailoredCv } from "@/lib/apply/cv";
+import { resolveTailoredCover } from "@/lib/apply/cover";
 import { careerOpsRoot, isRegularContainedFile, pdfPathStatusForReport } from "@/lib/career-ops";
 import { companySlug } from "@/lib/company-slug.mjs";
 import { inlineDisposition } from "@/lib/content-disposition.mjs";
@@ -36,10 +37,30 @@ export async function GET(req: NextRequest) {
   const application = (req.nextUrl.searchParams.get("application") ?? "").trim();
   const kind = req.nextUrl.searchParams.get("kind") === "cover" ? "cover" : "cv";
 
-  // Cover letters only resolve through the report-number index. The application
-  // and company-slug paths below are CV-only and would serve a tailored CV under
-  // a cover download link when kind=cover arrives without n.
+  // Cover letters resolve through the report number (n) or tracker row (application).
   if (kind === "cover" && !n) {
+    if (application) {
+      const cover = await resolveTailoredCover(company || undefined, application);
+      if (cover) {
+        try {
+          return servePdf(cover);
+        } catch {
+          return new Response("could not read the PDF", { status: 500 });
+        }
+      }
+    }
+    return new Response("indexed cover letter is unavailable", { status: 404 });
+  }
+  if (kind === "cover") {
+    if (!/^\d+$/.test(n)) return new Response("invalid report number", { status: 400 });
+    const exact = await pdfPathStatusForReport(n, "cover");
+    if (exact.status === "found") {
+      try {
+        return servePdf(exact.path);
+      } catch {
+        return new Response("could not read the PDF", { status: 500 });
+      }
+    }
     return new Response("indexed cover letter is unavailable", { status: 404 });
   }
 
@@ -60,8 +81,8 @@ export async function GET(req: NextRequest) {
         return new Response("could not read the PDF", { status: 500 });
       }
     }
-    if (exact.status === "rejected" || kind === "cover") {
-      return new Response(kind === "cover" ? "indexed cover letter is unavailable" : "indexed tailored CV is unavailable", { status: 404 });
+    if (exact.status === "rejected") {
+      return new Response("indexed tailored CV is unavailable", { status: 404 });
     }
     // No index entry (e.g. a report generated before pdf-index.tsv existed) —
     // fall through to the company-slug heuristic below rather than 404 on a

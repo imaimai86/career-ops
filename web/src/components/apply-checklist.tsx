@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ArrowLeft, ExternalLink, Zap, Loader2, CheckCircle2 } from "lucide-react";
 import { PageFrame } from "@/components/page-frame";
 import { MarkPdfReadyButton } from "@/components/mark-pdf-ready-button";
 import { saveStatus } from "@/lib/pipeline-status.mjs";
@@ -50,6 +50,37 @@ export function ApplyChecklist({
   status: string;
   pdfReady: boolean;
 }) {
+  const [directFilling, setDirectFilling] = useState(false);
+  const [directStatus, setDirectStatus] = useState<string | null>(null);
+
+  const handleFastFill = async () => {
+    if (!postingUrl) return;
+    setDirectFilling(true);
+    setDirectStatus(null);
+    try {
+      const res = await fetch("/api/apply/direct", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: postingUrl,
+          company,
+          application: trackerNum || (reportNum ? String(reportNum) : undefined),
+          title: role || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setDirectStatus(data.message || "Form opened and pre-filled with Playwright!");
+      } else {
+        setDirectStatus(data.error || "Direct fill failed.");
+      }
+    } catch {
+      setDirectStatus("Direct fill failed.");
+    } finally {
+      setDirectFilling(false);
+    }
+  };
+
   return (
     <PageFrame className="max-w-3xl">
       <Link href={backHref} className="inline-flex items-center gap-1.5 text-sm text-muted transition-colors hover:text-brand">
@@ -66,12 +97,29 @@ export function ApplyChecklist({
 
       <Section title="Posting">
         {postingUrl ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <a href={postingUrl} target="_blank" rel="noreferrer" className={PILL}>
-              Open <ExternalLink className="size-3.5" />
-            </a>
-            <CopyButton text={postingUrl} label="Copy URL" />
-            <span className="min-w-0 break-all font-mono text-xs text-faint">{postingUrl}</span>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleFastFill}
+                disabled={directFilling}
+                title="Open visible browser and fill form directly with Playwright in ~2 seconds (attaches tailored CV and Cover Letter)"
+                className="inline-flex items-center justify-center gap-1.5 rounded-full border border-amber-500/50 bg-amber-500/15 px-3 py-1 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-500 hover:text-white dark:text-amber-300 dark:hover:text-black max-sm:min-h-[44px] disabled:opacity-50"
+              >
+                {directFilling ? <Loader2 className="size-3.5 animate-spin" /> : <Zap className="size-3.5" />}
+                {directFilling ? "Filling with Playwright…" : "Fast Playwright Direct Fill"}
+              </button>
+              <a href={postingUrl} target="_blank" rel="noreferrer" className={PILL}>
+                Open <ExternalLink className="size-3.5" />
+              </a>
+              <CopyButton text={postingUrl} label="Copy URL" />
+              <span className="min-w-0 break-all font-mono text-xs text-faint">{postingUrl}</span>
+            </div>
+            {directStatus && (
+              <p className="mt-2.5 flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="size-3.5" /> {directStatus}
+              </p>
+            )}
           </div>
         ) : (
           <Empty>No posting URL on this application.</Empty>

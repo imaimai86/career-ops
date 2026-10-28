@@ -11,3 +11,11 @@ const RESUME_LABEL_RX =
 export function isResumeLabel(label) {
   return RESUME_LABEL_RX.test(label || "");
 }
+
+const COVER_LABEL_RX =
+  /cover\s*letter|coverletter|motivation\s*letter|letter\s*of\s*motivation|anschreiben|lettre\s*de\s*motivation|carta\s*de\s*(?:presentaci[óo]n|motiva[çc][ãa]o)|carta\s*di\s*presentazione|motivatiebrief|list\s*motywacyjny|сопроводительное\s*письмо|\bcover\b/iu;
+
+/** @param {string | undefined} label */
+export function isCoverLabel(label) {
+  return COVER_LABEL_RX.test(label || "");
+}

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { careerOpsRoot, findApplication, pdfPathStatusForReport } from "@/lib/career-ops";
+import { careerOpsRoot, findApplication, findApplicationByUrl, pdfPathStatusForReport } from "@/lib/career-ops";
 import { companySlug } from "@/lib/company-slug.mjs";
 import { matchesTailoredCv, sortNewestFirst } from "./cv-match.mjs";
 import { reportNumberFromCell } from "./cv-selection.mjs";
@@ -61,13 +61,45 @@ export async function resolveTailoredCv(company?: string, applicationNumber?: st
  * Both routes call this. Two copies of the same three-way expression, one per
  * route, is how they drift apart again.
  */
-export async function resolveSessionCv(opts: { company?: string; application?: string; title?: string }): Promise<string | null> {
+export async function resolveSessionCv(opts: {
+  company?: string;
+  application?: string;
+  title?: string;
+  url?: string;
+  allowFallback?: boolean;
+}): Promise<string | null> {
   const direct = await resolveTailoredCv(opts.company, opts.application);
   if (direct) return direct;
-  // An application number that resolved nothing means THIS role has no tailored
-  // CV. Guessing a company off the page title would attach a sibling role's.
+  if (!opts.application && opts.url) {
+    const matched = findApplicationByUrl(opts.url);
+    if (matched) {
+      const fromUrl = await resolveTailoredCv(matched.company, matched.n);
+      if (fromUrl) return fromUrl;
+    }
+  }
   if (opts.application) return null;
-  return resolveTailoredCv(companyFromTitle(opts.title));
+  const fromTitle = await resolveTailoredCv(companyFromTitle(opts.title));
+  if (fromTitle) return fromTitle;
+  if (opts.allowFallback) {
+    return resolveFallbackCv();
+  }
+  return null;
+}
+
+/**
+ * Returns the default base CV PDF when a tailored CV is not available.
+ */
+export function resolveFallbackCv(): string | null {
+  const root = careerOpsRoot();
+  const candidates = [
+    path.join(root, "cv.pdf"),
+    path.join(root, "output", "cv-latest.pdf"),
+    path.join(root, "2026-10-11-ANAS-CV.pdf"),
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return null;
 }
 
 /**

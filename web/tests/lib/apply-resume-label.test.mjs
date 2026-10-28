@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isResumeLabel } from "../../src/lib/apply/resume-label.mjs";
+import { isResumeLabel, isCoverLabel } from "../../src/lib/apply/resume-label.mjs";
 
 const RESUME = [
   "Resume", "Résumé / CV", "RÉSUMÉ", "Upload your CV", "Lebenslauf", "Currículum vitae",
@@ -13,5 +13,19 @@ for (const label of RESUME) {
   test(`"${label}" is a résumé upload`, () => assert.equal(isResumeLabel(label), true));
 }
 for (const label of NOT_RESUME) {
-  test(`"${label}" is left for the person`, () => assert.equal(isResumeLabel(label), false));
+  test(`"${label}" is left for the person (not a resume)`, () => assert.equal(isResumeLabel(label), false));
+}
+
+const COVER = [
+  "Cover letter", "Cover Letter", "COVER LETTER", "CoverLetter", "Motivation letter", "Letter of motivation",
+  "Anschreiben", "Lettre de motivation", "Carta de presentación", "Carta de presentacion", "Carta di presentazione",
+  "Carta de motivação", "Motivatiebrief", "List motywacyjny", "Сопроводительное письмо", "Cover note",
+];
+const NOT_COVER = ["Resume", "CV", "Portfolio", "Certificates", "Zeugnisse", "CVV", "Transcript"];
+
+for (const label of COVER) {
+  test(`"${label}" is a cover letter upload`, () => assert.equal(isCoverLabel(label), true));
+}
+for (const label of NOT_COVER) {
+  test(`"${label}" is not a cover letter upload`, () => assert.equal(isCoverLabel(label), false));
 }

@@ -1,5 +1,6 @@
 import { fillSession, handoffSession, getSession } from "@/lib/apply/session";
 import { resolveSessionCv } from "@/lib/apply/cv";
+import { resolveSessionCover } from "@/lib/apply/cover";
 import type { ApplyField } from "@/lib/apply/extract";
 import { readJsonObject } from "@/lib/json-body";
 
@@ -22,15 +23,16 @@ export async function POST(req: Request) {
     return Response.json({ error: "application must be a string" }, { status: 400 });
   }
 
-  // Resolve the tailored CV server-side (never trust a client path): by the
+  // Resolve the tailored CV and Cover Letter server-side (never trust a client path): by the
   // offer's company if known, else best-effort from the form title.
   const session = getSession(sessionId);
-  const cvPath = (await resolveSessionCv({ company, application, title: session?.title })) ?? undefined;
+  const cvPath = (await resolveSessionCv({ company, application, title: session?.title, url: session?.url, allowFallback: true })) ?? undefined;
+  const coverPath = (await resolveSessionCover({ company, application, title: session?.title, url: session?.url })) ?? undefined;
 
   try {
-    const result = await fillSession(sessionId, answers, fields, cvPath);
+    const result = await fillSession(sessionId, answers, fields, cvPath, coverPath);
     if (handoff) await handoffSession(sessionId).catch(() => {});
-    return Response.json({ ...result, handedOff: !!handoff, cvAttached: !!cvPath });
+    return Response.json({ ...result, handedOff: !!handoff, cvAttached: !!cvPath, coverAttached: !!coverPath });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message.slice(0, 200) : "fill failed" }, { status: 500 });
   }

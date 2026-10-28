@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { careerOpsRoot, findApplication, isRegularContainedFile } from "@/lib/career-ops";
+import { careerOpsRoot, findApplication, findApplicationByUrl, isRegularContainedFile, pdfPathStatusForReport } from "@/lib/career-ops";
 import { companySlug } from "@/lib/company-slug.mjs";
 import { hasToken, matchesTailoredCover, sortNewestFirst } from "./cv-match.mjs";
+import { companyFromTitle } from "@/lib/apply/cv";
+import { reportNumberFromCell } from "./cv-selection.mjs";
 
 /** The length generate-cover-letter.mjs truncates a role slug to when it builds
  *  a default output filename (`role.slice(0, 30)`). A role longer than this is
@@ -13,34 +15,22 @@ const ROLE_SLUG_MAX = 30;
  * Locate the tailored COVER LETTER PDF for an application. Returns an absolute
  * path or null.
  *
- * Async, and taking the tracker application number, to stay the same shape as
- * resolveTailoredCv (#2599) — resolving a tailored artifact by company ALONE
- * is a bug, because two applications at one company then both receive the
- * company's newest file.
- *
- * It cannot fix that the way resolveTailoredCv does, though. That resolver
- * joins the application to data/pdf-index.tsv via pdfPathStatusForReport, and
- * THAT MANIFEST CANNOT REPRESENT A COVER: its header is
- * `# report\tpdf\thtml\tformat\tdate` with no kind column, and
- * updatePDFManifest drops any existing row for a report number before
- * appending, so a cover generated with `--report N` evicts that report's CV
- * row (#3887). Reading a cover back out of it would hand over whichever
- * artifact happened to be written last — sometimes the CV.
- *
- * So the application is identified from the tracker row itself: the cover must
- * carry BOTH the row's company slug and its role slug at token boundaries. If
- * no file on disk identifies this row's role, the answer is null — with two
- * covers for one company and nothing to tell them apart, returning the newest
- * is exactly the #2599 defect. Company-only matching remains for the caller
- * that has no tracker row (a manually pasted URL).
+ * When the tracker application number is known, checks the report -> PDF manifest
+ * (via pdfPathStatusForReport with kind "cover") first. If not found in manifest,
+ * falls back to matching the company and role slug (or report number token) on disk.
  */
 export async function resolveTailoredCover(company?: string, applicationNumber?: string): Promise<string | null> {
   const n = applicationNumber?.trim();
-  // A number that names no row resolves nothing rather than silently widening
-  // to the company scan, the same way resolveTailoredCv returns null for a row
-  // it cannot join.
   const app = n ? findApplication(n) : null;
   if (n && !app) return null;
+
+  if (app) {
+    const reportNumber = reportNumberFromCell(app.report);
+    if (reportNumber) {
+      const result = await pdfPathStatusForReport(String(reportNumber), "cover");
+      if (result.status === "found") return result.path;
+    }
+  }
 
   const key = companySlug(app?.company ?? company);
   if (!key) return null;
@@ -64,11 +54,37 @@ export async function resolveTailoredCover(company?: string, applicationNumber?:
   if (app) {
     const role = companySlug(app.role)?.slug;
     const wanted = role ? [role, role.slice(0, ROLE_SLUG_MAX)] : [];
-    files = files.filter((f) => wanted.some((r) => hasToken(f.toLowerCase(), r)));
+    const reportNum = reportNumberFromCell(app.report);
+    const reportToken = reportNum ? String(reportNum).padStart(3, "0") : null;
+    const roleMatches = files.filter((f) => wanted.some((r) => hasToken(f.toLowerCase(), r)));
+    if (roleMatches.length > 0) {
+      files = roleMatches;
+    } else if (reportToken) {
+      files = files.filter((f) => hasToken(f.toLowerCase(), reportToken));
+    } else {
+      files = [];
+    }
   }
 
   if (!files.length) return null;
   const sorted = sortNewestFirst(dir, files);
   if (!sorted.length) return null;
   return path.join(dir, sorted[0]);
+}
+
+/**
+ * The tailored Cover Letter for one apply session, resolved once for the form filler.
+ */
+export async function resolveSessionCover(opts: { company?: string; application?: string; title?: string; url?: string }): Promise<string | null> {
+  const direct = await resolveTailoredCover(opts.company, opts.application);
+  if (direct) return direct;
+  if (!opts.application && opts.url) {
+    const matched = findApplicationByUrl(opts.url);
+    if (matched) {
+      const fromUrl = await resolveTailoredCover(matched.company, matched.n);
+      if (fromUrl) return fromUrl;
+    }
+  }
+  if (opts.application) return null;
+  return resolveTailoredCover(companyFromTitle(opts.title));
 }

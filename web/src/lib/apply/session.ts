@@ -6,7 +6,7 @@ import { parseGreenhouse, fetchGreenhouseSchema } from "./greenhouse";
 import { statusBlock, dismissConsent, tryApplyTrigger, dropNewTabs, classifyEmpty, captchaWarning, multiStepInfo, verifyFill, type ApplyIssue } from "./diagnose";
 import { interpretFormWithAgent } from "./agent-interpret";
 import { pickComboboxOption } from "./option-match.mjs";
-import { isResumeLabel } from "./resume-label.mjs";
+import { isResumeLabel, isCoverLabel } from "./resume-label.mjs";
 import { resolveCli } from "../clis";
 import { fencingReport } from "../cli-fencing.mjs";
 import { CAPS } from "../worker-capabilities.mjs";
@@ -411,20 +411,35 @@ export async function closeSession(id: string): Promise<void> {
 
 export type FillStep = { fieldId: string; label: string; ok: boolean; thumb?: string };
 
-/** True for a file field that wants the candidate's résumé/CV (vs. cover letter,
- *  portfolio, or a generic attachment we leave for the user). */
+/** True for a file field that wants the candidate's résumé/CV. */
 function isResumeField(f: ApplyField): boolean {
-  return f.type === "file" && isResumeLabel(f.label);
+  if (f.type !== "file") return false;
+  if (isResumeLabel(f.label)) return true;
+  if (f.nativeId && /resume|_cv|curriculum/i.test(f.nativeId)) return true;
+  if (f.nativeName && /resume|_cv|curriculum/i.test(f.nativeName)) return true;
+  return false;
+}
+
+/** True for a file field that wants the candidate's cover letter. */
+function isCoverField(f: ApplyField): boolean {
+  if (f.type !== "file") return false;
+  if (isResumeField(f)) return false;
+  if (isCoverLabel(f.label)) return true;
+  if (f.nativeId && /cover/i.test(f.nativeId)) return true;
+  if (f.nativeName && /cover/i.test(f.nativeName)) return true;
+  return false;
 }
 
 /** Fill the real form with verified answers, screenshotting after each field.
- *  Attaches the tailored CV PDF to résumé/CV file fields (cvPath). NEVER clicks a
+ *  Attaches the tailored CV PDF to résumé/CV file fields (cvPath) and tailored
+ *  Cover Letter PDF to cover letter file fields (coverPath). NEVER clicks a
  *  submit/apply control — only fills/selects/checks/attaches. */
 export async function fillSession(
   id: string,
   answers: Record<string, string>,
   fieldsMeta: ApplyField[],
   cvPath?: string,
+  coverPath?: string,
 ): Promise<{ steps: FillStep[]; navigated: boolean; issues: ApplyIssue[] }> {
   const s = SESSIONS.get(id);
   if (!s) throw new Error("apply session not found (it may have expired)");
@@ -453,7 +468,7 @@ export async function fillSession(
   // 1) Attach the tailored CV to every résumé/CV file field (even with no text
   //    answer). The real <input type=file> was tagged data-co-field at extract
   //    time; setInputFiles works even when the ATS visually hides it behind a
-  //    dropzone. Other file fields (cover letter, portfolio) are left to the user.
+  //    dropzone.
   if (cvPath) {
     for (const meta of fieldsMeta) {
       if (!isResumeField(meta)) continue;
@@ -471,11 +486,26 @@ export async function fillSession(
     }
   }
 
+  // 1b) Attach the tailored Cover Letter to cover letter file fields.
+  if (coverPath) {
+    for (const meta of fieldsMeta) {
+      if (!isCoverField(meta)) continue;
+      let ok = false;
+      try {
+        await s.frame.locator(`[data-co-field="${cssAttr(meta.id)}"]`).first().setInputFiles(coverPath);
+        ok = true;
+      } catch {
+        ok = false;
+      }
+      steps.push({ fieldId: meta.id, label: `${meta.label || "Cover Letter"} (Cover Letter attached)`, ok, thumb: await shoot() });
+    }
+  }
+
   for (const [fid, raw] of Object.entries(answers)) {
     const meta = byId.get(fid);
     const value = (raw ?? "").toString();
     if (!meta || value === "") continue;
-    if (meta.type === "file") continue; // handled above (CV) — never auto-fill other uploads
+    if (meta.type === "file") continue; // handled above (CV / Cover) — never auto-fill other uploads
     // Defense-in-depth: NEVER auto-tick a legal consent/agreement checkbox — the
     // human must affirmatively accept. (The planner already flags these
     // needs_confirmation; this guarantees it even if it slips.)

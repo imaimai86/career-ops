@@ -59,6 +59,43 @@ for (const exactFails of [false, true]) {
   });
 }
 
+test("Cover letter upload uses the tagged cover input and never targets the resume field", async () => {
+  const uploads = [];
+  const frame = {
+    url: () => "about:blank",
+    locator: (selector) => ({ first: () => ({ setInputFiles: async (file) => {
+      uploads.push({ selector, file });
+    } }) }),
+    evaluate: async () => ({ mismatches: [], requiredEmpty: [], valErrors: [] }),
+  };
+  const page = { screenshot: async () => Buffer.from("fixture") };
+  const result = await withSession(frame, page, (id) => fillSession(id, {}, [cover, resume], undefined, "/fixture/cover.pdf"));
+  assert.deepEqual(uploads, [{ selector: '[data-co-field="cover"]', file: "/fixture/cover.pdf" }]);
+  assert.equal(result.steps.length, 1);
+  assert.equal(result.steps[0].fieldId, "cover");
+  assert.equal(result.steps[0].ok, true);
+});
+
+test("Both CV and Cover letter are uploaded to their respective tagged inputs when provided", async () => {
+  const uploads = [];
+  const frame = {
+    url: () => "about:blank",
+    locator: (selector) => ({ first: () => ({ setInputFiles: async (file) => {
+      uploads.push({ selector, file });
+    } }) }),
+    evaluate: async () => ({ mismatches: [], requiredEmpty: [], valErrors: [] }),
+  };
+  const page = { screenshot: async () => Buffer.from("fixture") };
+  const result = await withSession(frame, page, (id) => fillSession(id, {}, [cover, resume], "/fixture/cv.pdf", "/fixture/cover.pdf"));
+  assert.deepEqual(uploads, [
+    { selector: '[data-co-field="resume"]', file: "/fixture/cv.pdf" },
+    { selector: '[data-co-field="cover"]', file: "/fixture/cover.pdf" },
+  ]);
+  assert.equal(result.steps.length, 2);
+  assert.equal(result.steps[0].fieldId, "resume");
+  assert.equal(result.steps[1].fieldId, "cover");
+});
+
 // Opt-in browser proof: only local DOM and disposable documents; no ATS or CLI.
 test("a re-rendered resume field never receives its CV through the cover input", { skip: !process.env.APPLY_UPLOAD_BROWSER_TEST }, async (t) => {
   const { chromium } = await import("playwright-core");
